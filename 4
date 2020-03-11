@@ -1,0 +1,687 @@
+//雷达
+
+#include <iostream>
+#include <fstream>
+#include <unistd.h>
+#include <pthread.h>
+#include <cmath>
+// #include <thread>
+#include <ros/ros.h> 
+#include <chrono>
+#include <unistd.h>
+#include <pthread.h>
+#include <vector>
+#include <sensor_msgs/LaserScan.h>
+
+#include "serial.h"
+#include "kalman.h"
+// #include "test.h"
+
+#include "pcl_conversions/pcl_conversions.h"
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/filters/passthrough.h>
+#include <pcl/ModelCoefficients.h>
+#include <pcl/point_types.h>
+#include <pcl/sample_consensus/method_types.h>
+#include <pcl/sample_consensus/model_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/features/normal_3d.h>
+#include <fstream>
+#include <pcl/filters/project_inliers.h>
+
+
+#include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/conditional_removal.h>
+#include <pcl/filters/statistical_outlier_removal.h>
+
+using namespace std;
+using namespace std::literals::chrono_literals;
+typedef pcl::PointXYZ PointT;
+fstream f1("/home/mi/catkin_ws/data0.txt",ios::out|ios::trunc);
+double distance(double a1,double b1,double a2,double b2){
+  return sqrt(pow(a1-b1,2) + pow(a2-b2,2));
+}
+class cylinder_Node{
+public:
+  double x;
+  double y;
+  double height;
+  cylinder_Node* left;
+  cylinder_Node* right;
+  cylinder_Node(){
+    x=100000;
+    y=100000;
+    height=0;
+    left=NULL;
+    right=NULL;
+  }
+  cylinder_Node(double x1,double y1,double height1){
+    x=x1;
+    y=y1;
+    height=height1;
+    left=NULL;
+    right=NULL;
+  }
+};
+class cylinder_tree{//二叉搜索树
+
+
+  public:
+    cylinder_Node* tree;
+  cylinder_Node* trees[5];
+  int index;
+  cylinder_tree(){
+    tree=new cylinder_Node();
+    index=0;
+  }
+  void setTree(double x,double y,double height){
+    tree->x=x;
+    tree->y=y;
+    tree->height=height;
+  }
+  cylinder_Node* insert(cylinder_Node* node,double x,double y,double height){
+    if(node==NULL){
+
+      return new cylinder_Node(x,y,height);
+    }
+    if(x<node->x){
+      node->left=insert(node->left,x,y,height);
+      return node;
+    }
+    else if(x>node->x){
+      node->right=insert(node->right,x,y,height);
+      return node;
+    }
+    else{
+     // cout<<"有重复"<<endl;
+      return node;
+    }
+  }
+  void preorder(cylinder_Node* node){//钱旭遍历给柱子编号
+    if(node==NULL){
+      return;
+    }
+    preorder(node->left);
+    trees[index]=node;
+    index++;
+    preorder(node->right);
+  }
+
+
+
+void get_coordinate(double& XS,double& YS){
+    index=0;
+    preorder(tree);//排好序的柱子
+    double sin,cos;
+    double XR,YR;
+    double dis01,dis12,dis23,dis34,dis45;
+    double sumY02,sumY13;
+    dis01=distance(trees[0]->x,trees[1]->x,trees[0]->y,trees[1]->y);
+    dis12=distance(trees[1]->x,trees[2]->x,trees[1]->y,trees[2]->y);
+    dis23=distance(trees[2]->x,trees[3]->x,trees[2]->y,trees[3]->y);
+    dis34=distance(trees[2]->x,trees[3]->x,trees[2]->y,trees[3]->y);
+   // cout<<"dis01= "<<dis01<<" dis12= "<<dis12<<" dis23= "<<dis23<<endl;
+    if(index==4){
+      if( dis01 > 1850 && dis01 < 2100 && dis12 > 1850 && dis12 < 2100 && dis23 > 2500 && dis23 < 2700){//４号柱子被挡住了
+     //  cout<<"4号柱子被挡住了"<<endl;
+       if(trees[3]->x<0){//在５号柱子前面，所有柱子都在后面
+       // cout<<"用"<<1<<" "<<3<<endl;
+        sin=(trees[1]->y-trees[3]->y)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));//雷达坐标系相对世界坐标系的旋转角度的三角函数
+       cos=(trees[3]->x-trees[1]->x)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+       XR=5750;//世界坐标系中柱子的坐标
+       YR=0;
+
+        XS=XR-trees[1]->x*cos+trees[1]->y*sin;
+       YS=YR-trees[1]->x*sin-trees[1]->y*cos;
+       cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+       }
+       if(trees[2]->x>0&&trees[1]->x<0){//在2　3号柱子之间
+      //  cout<<"用"<<0<<" "<<2<<endl;
+       sin=(trees[0]->y-trees[2]->y)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+       cos=(trees[2]->x-trees[0]->x)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+       XR=3090;//世界坐标系中柱子的坐标
+       YR=0;
+
+       XS=XR-trees[0]->x*cos+trees[0]->y*sin;
+       YS=YR-trees[0]->x*sin-trees[0]->y*cos;
+       cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+        }
+ 
+      }
+   else if( dis01 > 2500 && dis01 < 2700 && dis12 > 1850 && dis12 < 2100 && dis23 > 1850 && dis23 < 2100){//２号柱子被挡住了
+    //cout<<"２号柱子被挡住了"<<endl;
+       if(trees[2]->x>0&&trees[1]->x<0){//在３４号柱子之间
+      // cout<<"用"<<1<<" "<<3<<endl;
+        sin=(trees[1]->y-trees[3]->y)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+       cos=(trees[3]->x-trees[1]->x)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+       XR=5750;//世界坐标系中柱子的坐标
+       YR=0;
+
+        XS=XR-trees[1]->x*cos+trees[1]->y*sin;
+       YS=YR-trees[1]->x*sin-trees[1]->y*cos;
+       cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+       }
+       if(trees[0]->x>0){//在１号柱子后面，所有柱子都在前面
+     // cout<<"用"<<0<<" "<<2<<endl;
+       sin=(trees[0]->y-trees[2]->y)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+       cos=(trees[2]->x-trees[0]->x)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+       XR=3090;//世界坐标系中柱子的坐标
+       YR=0;
+
+       XS=XR-trees[0]->x*cos+trees[0]->y*sin;
+       YS=YR-trees[0]->x*sin-trees[0]->y*cos;
+       cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+        }
+    }
+
+    else  if(dis01 > 1850 && dis01 < 2100 && dis12 > 1850 && dis12 < 2100 && dis23 > 1850 && dis23 < 2100)//１号或者５号柱子被挡住了
+      {  
+        sumY02=trees[0]->y+trees[2]->y;
+        sumY13=trees[1]->y+trees[3]->y;
+   //    cout<<"sumy02 "<<sumY02<<" sumy13 "<<sumY13<<endl;
+      if(sumY13<sumY02 ){//5号柱子被挡住了
+       //cout<<"5号柱子被挡住了"<<endl;
+      //cout<<"用"<<0<<" "<<2<<endl;
+      sin=(trees[0]->y-trees[2]->y)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+      cos=(trees[2]->x-trees[0]->x)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+      XR=3090;//世界坐标系中柱子的坐标
+      YR=0;
+
+      XS=XR-trees[0]->x*cos+trees[0]->y*sin;
+      YS=YR-trees[0]->x*sin-trees[0]->y*cos;
+      cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+    
+      }
+       if(sumY02<sumY13){//１号柱子被挡住了
+       // cout<<"1号柱子被挡住了"<<endl;
+       // cout<<"用"<<1<<" "<<3<<endl;
+      sin=(trees[1]->y-trees[3]->y)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+      cos=(trees[3]->x-trees[1]->x)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+      XR=5750;//世界坐标系中柱子的坐标
+      YR=0;
+
+     XS=XR-trees[1]->x*cos+trees[1]->y*sin;
+     YS=YR-trees[1]->x*sin-trees[1]->y*cos;
+      cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+     
+      }
+        
+    }
+    else{
+       cout<<"xs: " <<0<<" ys: "<<0<<endl;
+    }
+    
+}
+
+  else  if(index==5){//四个是在进踢球区的边界三个中的第一个或第三个被挡住了
+  dis45=distance(trees[3]->x,trees[4]->x,trees[3]->y,trees[4]->y);
+  
+  //cout<<"dis45= "<<dis45<<endl;
+     // cout<<"2号x= "<<trees[2]->x<<endl;
+      if(trees[2]->x>=0){//２号柱子大于０，在前半段
+      // cout<<"用"<<0<<" "<<2<<endl;
+      sin=(trees[0]->y-trees[2]->y)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));//雷达坐标系相对世界坐标系的旋转角度的三角函数
+      cos=(trees[2]->x-trees[0]->x)/sqrt(pow(trees[0]->x-trees[2]->x,2)+pow(trees[0]->y-trees[2]->y,2));
+      XR=3090;//世界坐标系中柱子的坐标
+      YR=0;
+
+      XS=XR-trees[0]->x*cos+trees[0]->y*sin;
+      YS=YR-trees[0]->x*sin-trees[0]->y*cos;
+      cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+    
+      }
+      else if(trees[2]->x<0){//2号柱子小于０，在后半段
+       //cout<<"用"<<1<<" "<<3<<endl;
+      sin=(trees[1]->y-trees[3]->y)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));//雷达坐标系相对世界坐标系的旋转角度的三角函数
+      cos=(trees[3]->x-trees[1]->x)/sqrt(pow(trees[1]->x-trees[3]->x,2)+pow(trees[1]->y-trees[3]->y,2));
+      XR=5750;//世界坐标系中柱子的坐标
+      YR=0;
+
+      XS=XR-trees[1]->x*cos+trees[1]->y*sin;
+     YS=YR-trees[1]->x*sin-trees[0]->y*cos;
+      cout<<"xs: "<<XS<<" ys: "<<YS<<endl;
+     
+      }
+     else{
+        cout<<"xs: " <<0<<" ys: "<<0<<endl;
+        
+   }
+
+
+}
+else{
+   cout<<"xs: " <<0<<" ys: "<<0<<endl;
+}
+}
+};
+
+//切割点云－－－－－－－－－－－－－－－－－－－
+pcl::PointCloud<PointT>::Ptr partition(pcl::PointCloud<PointT>::Ptr clouds,double x0,double x1,double y0,double y1,double z0,double z1){
+    pcl::PointCloud<PointT>::Ptr cloud0 (new pcl::PointCloud<PointT>);
+    pcl::PointCloud<PointT>::Ptr cloud1 (new pcl::PointCloud<PointT>);
+    pcl::PointCloud<PointT>::Ptr cloud2 (new pcl::PointCloud<PointT>);
+    pcl::PassThrough<PointT> pass;
+    pass.setInputCloud (clouds);
+    pass.setFilterFieldName ("x");
+    pass.setFilterLimits (x0,x1);
+    pass.filter (*cloud0);
+
+    pass.setInputCloud (cloud0);
+    pass.setFilterFieldName ("y");
+    pass.setFilterLimits (y0,y1);
+    pass.filter (*cloud1);
+
+    pass.setInputCloud (cloud1);
+    pass.setFilterFieldName ("z");
+    pass.setFilterLimits (z0,z1);
+    pass.filter (*cloud2);
+    return cloud2;
+}
+//切割圆柱－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－
+int segment( pcl::PointCloud<PointT>::Ptr cloud,double xl,double xr,double yl,double yr,double zl,double zr,cylinder_tree* cylinders,int i,double &X,double &Y, double &Height,pcl::PointCloud<PointT>::Ptr cloud_filtered1){
+  //cout<<"xl "<<xl<<" xr "<<xr<<" yl "<<yl<<" yr "<<yr<<endl;
+  pcl::ModelCoefficients::Ptr coefficients_cylinder (new pcl::ModelCoefficients);
+  pcl::PointIndices::Ptr  inliers_cylinder (new pcl::PointIndices);
+  pcl::PointCloud<pcl::Normal>::Ptr cloud_normals (new pcl::PointCloud<pcl::Normal>);
+  pcl::SACSegmentationFromNormals<PointT, pcl::Normal> seg; 
+  pcl::ExtractIndices<PointT> extract;
+  pcl::ExtractIndices<pcl::Normal> extract_normals;
+  pcl::NormalEstimation<PointT, pcl::Normal> ne;
+  pcl::search::KdTree<PointT>::Ptr tree (new pcl::search::KdTree<PointT> ());
+  pcl::PointCloud<PointT>::Ptr cloud_filtered (new pcl::PointCloud<PointT>);
+  pcl::PointCloud<PointT>::Ptr cloud_cylinder (new pcl::PointCloud<PointT> ());
+  double sum_x=0;
+  double sum_y=0;
+  double x;
+  double y;
+  double X0,X1,Y0,Y1;
+  double max_z=0;
+  double min_z=0;
+  double z=0;
+  double height;
+   cloud_filtered = partition(cloud,xl,xr,yl,yr,zl,zr);
+  //cout<<"cloud_filtered "<<cloud_filtered->points.size()<<endl;
+   if(cloud_filtered->points.size()==0){//点云里没有点的情况----------------------------
+  // cout<<"点云内没点"<<endl;
+    return 0;
+  }
+
+   ne.setSearchMethod (tree); 
+   ne.setInputCloud (cloud_filtered);
+   ne.setKSearch (50);
+   ne.compute (*cloud_normals);
+  
+   seg.setOptimizeCoefficients (true);
+   seg.setModelType (pcl::SACMODEL_CYLINDER);
+   seg.setMethodType (pcl::SAC_RANSAC);
+   seg.setNormalDistanceWeight (0.01);//越小对远处的圆柱拟合越好,0.05容易把一个柱子切两次
+   seg.setMaxIterations (10000);
+   seg.setDistanceThreshold (0.1);//0.1基本不需要动
+   seg.setRadiusLimits (-0.07, 0.07);
+   seg.setInputCloud (cloud_filtered);
+   seg.setInputNormals (cloud_normals);
+   seg.segment (*inliers_cylinder, *coefficients_cylinder);
+
+  extract.setInputCloud (cloud_filtered);
+  extract.setIndices (inliers_cylinder);
+  extract.setNegative (false);
+ 
+  extract.filter (*cloud_cylinder);
+  //cout<<"cloud_cylinder: "<<cloud_cylinder->points.size()<<endl;
+  if(cloud_cylinder->points.size()==0){//点云有点但是没有圆柱----------------------------
+ //cout<<"圆柱内没点，舍弃"<<endl;
+   return 1;       
+  }
+ 
+
+  for(int  it = 0;it < cloud_cylinder->points.size();++it){
+	  	sum_x += (double)cloud_cylinder->points[it].x*1000;
+	  	sum_y += (double)cloud_cylinder->points[it].y*1000;
+
+
+   }
+
+   x=sum_x/cloud_cylinder->points.size();
+   y=sum_y/cloud_cylinder->points.size();
+   X0=x;
+   Y0=y;
+   sum_x=0;
+   sum_y=0;
+
+   cloud_filtered = partition(cloud,X0/1000-0.2,X0/1000+0.2,Y0/1000-0.2,Y0/1000+0.2,zl,zr);//在0.4的正方形内找
+   //cout<<"cloud_filtered  1: "<<cloud_filtered->points.size()<<endl;
+    if(cloud_filtered->points.size()>0){
+         max_z=(double)cloud_filtered->points[0].z*1000;
+        min_z=(double)cloud_filtered->points[0].z*1000;
+      }
+    for(int  it = 0;it < cloud_filtered->points.size();++it){
+
+	  	sum_x += (double)cloud_filtered->points[it].x*1000;
+	  	sum_y += (double)cloud_filtered->points[it].y*1000;
+      z=(double)cloud_filtered->points[it].z*1000;
+      if(z>max_z){
+        max_z=z;
+      }
+      if(z<min_z){
+        min_z=z;
+      }
+
+    }
+    height=max_z-min_z;
+    //cout<<"height"<<max_z-min_z<<endl;
+  if((height)<30){//将高度小于30的非圆柱排除，可能是墙的一线或两线
+  //cout<<"太矮了，舍弃"<<endl;
+      return 3;
+  }
+  if(height>1000){
+   //cout<<"太高了，舍去"<<endl;
+     return 3;
+  }
+   x=sum_x/cloud_filtered->points.size();
+   y=sum_y/cloud_filtered->points.size();
+   X1=x;
+   Y1=y;
+  //  cout<<"dis "<<distance(X0,X1,Y0,Y1)<<endl;  
+  if(distance(X0,X1,Y0,Y1)<50){//两次拟合的圆柱的距离小于50
+     // cout<<"cloud_filtered"<<cloud_filtered->points.size()<<endl;
+       if(i==0){
+       // cout<<"找到第一根柱子"<<endl;
+        cylinders->setTree(X1,Y1,height);
+       }
+        else{
+          cylinders->index=0;
+         cylinders->preorder(cylinders->tree);
+       //  cout<<"index　"<<cylinders->index<<endl;
+          double dist0=distance(cylinders->trees[0]->x,X1,cylinders->trees[0]->y,Y1);//要么和x最小的接近，向后的情况
+       
+         double dist1=distance(cylinders->trees[cylinders->index-1]->x,X1,cylinders->trees[cylinders->index-1]->y,Y1);//要么和x最大的接近，向前的情况
+       // cout<<"和0距离　"<<dist0<<" 和"<< cylinders->index-1<<"距离 "<<dist1<<endl;
+
+         if((dist0>1850&&dist0<2100)||(dist0>2500&&dist0<2700)||(dist1>1850&&dist1<2100)||(dist1>2500&&dist1<2700)){
+        //  cout<<"满足要求，找到柱子"<<endl;
+       //   cout<<"点个数为"<<cloud_filtered->points.size()<<endl;
+           
+         }
+         
+         else{//如果和上一个柱子距离不满足要求就不要
+       //  cout<<"柱子和最近的柱子距离不满足要求，舍去"<<endl;
+         return 3;
+         }
+      }
+
+       *cloud_filtered1=*cloud_filtered;//把找到的柱子存起来
+       X=X1;
+       Y=Y1;
+       Height=height;
+     //  cout<<"X "<<X<<" Y "<<Y<<" Height "<<Height<<endl;
+       return 2;//成功切割圆柱---------------------
+  
+  }
+  else{//找到的圆柱不对--------------------------------
+  //cout<<"找到的柱子和点云不重叠"<<endl;
+   return 3;
+  }
+}
+int part_segment( pcl::PointCloud<PointT>::Ptr cloud,double xl,double xr,double yl,double yr,double zl,double zr,cylinder_tree* cylinders,int i,double &X,double &Y, double &Height,vector<pcl::PointCloud<PointT>::Ptr>& cloud_cylinders){
+    double mid = (yl+yr)/2;
+    int j0,j1,j2;
+    double X0=10000;
+    double X1=10000;
+    double Y0=10000;
+    double Y1=10000;
+
+    double height0,height1;
+    pcl::PointCloud<PointT>::Ptr cloud_filtered0 (new pcl::PointCloud<PointT>);
+    pcl::PointCloud<PointT>::Ptr cloud_filtered1 (new pcl::PointCloud<PointT>);
+
+    if(segment(cloud,xl,xr,yl,mid,zl,zr,cylinders,i,X0,Y0,height0,cloud_filtered0)==2&&X0!=10000&&Y0!=10000){
+        X=X0;
+        Y=Y0;
+        Height=height0;
+      *cloud_cylinders[i]=*cloud_filtered0;//把找到的柱子存起来
+      if(i>0){
+          cylinders->insert(cylinders->tree,X0,Y0,height0);
+      }
+      
+        return 2;
+    }
+    else if(segment(cloud,xl,xr,mid,yr,zl,zr,cylinders,i,X1,Y1,height1,cloud_filtered1)==2&&X1!=10000&&Y1!=10000){
+       X=X1;
+        Y=Y1;
+        Height=height1;
+        *cloud_cylinders[i]=*cloud_filtered1;//把找到的柱子存起来
+      if(i>0){
+          cylinders->insert(cylinders->tree,X1,Y1,height1);
+      }
+        return 2;
+    }
+    else{
+      return 0;
+    }
+  
+}
+void velodyneViewerCallback(const sensor_msgs::PointCloud2::ConstPtr &lidarMsg) {
+  int i=0;
+  int j=0;
+	// All the objects needed
+  pcl::PCDReader reader;
+
+  pcl::PCDWriter writer;
+
+
+  // Datasets
+  pcl::PointCloud<PointT>::Ptr cloud (new pcl::PointCloud<PointT>);
+
+
+
+
+   pcl::PointCloud<PointT>::Ptr cloud_cylinder0 (new pcl::PointCloud<PointT> ());
+  pcl::PointCloud<PointT>::Ptr cloud_cylinder1 (new pcl::PointCloud<PointT> ());
+  pcl::PointCloud<PointT>::Ptr cloud_cylinder2 (new pcl::PointCloud<PointT> ());
+    pcl::PointCloud<PointT>::Ptr cloud_cylinder3 (new pcl::PointCloud<PointT> ());
+  pcl::PointCloud<PointT>::Ptr cloud_cylinder4 (new pcl::PointCloud<PointT> ());
+  vector<pcl::PointCloud<PointT>::Ptr> cloud_cylinders;
+  cloud_cylinders.push_back(cloud_cylinder0);
+  cloud_cylinders.push_back(cloud_cylinder1);
+  cloud_cylinders.push_back(cloud_cylinder2);
+  cloud_cylinders.push_back(cloud_cylinder3);
+  cloud_cylinders.push_back(cloud_cylinder4);
+
+
+ fromROSMsg(*lidarMsg,*cloud);
+
+double xl=0;
+double xr=1.4;
+double yl=-3;//放宽的话歪了也能看见
+double yr=2;
+double zl=-0.1;
+double zr=2;
+cylinder_tree* cylinders=new cylinder_tree();
+int direction=0;
+double X,Y,Height;
+double XS=10000;
+double YS=10000;
+double XF=0;
+double YF=0;
+for(i=0;i<5;){
+ // cout<<"i="<<i<<endl;
+ //cout<<"寻找 x "<<xl<<" "<<xr<<" y "<<yl<<" "<<yr<<endl;
+j=part_segment(cloud,xl,xr,yl,yr,zl,zr,cylinders,i,X,Y,Height,cloud_cylinders);
+
+if(direction==2){//换方向超过两次
+//cout<<"翻转了两次结束"<<endl;
+    break;
+}
+if(j==0){//切割点云不是圆柱或者切割出来的‘圆柱’周围有干扰就换方向
+//cout<<"没找到 "<<xl<<" "<<xr<<" y "<<yl<<" "<<yr<<endl;
+  
+    if(direction){//注意j==0只多找了一次，避免了空旷场地连续多个空白点云的情况
+
+    if(part_segment(cloud,xl-1.4,xr-1.4,yl,yr,zl,zr,cylinders,i,X,Y,Height,cloud_cylinders)==2){
+      if(i==0){//超出最后一个柱子前1.4会遇到这种情况
+      XF=X;
+      YF=Y;
+      }
+      xr=X/1000-0.2;
+      xl=xr-1.4;
+      yl=Y/1000-2;
+      yr=Y/1000+2;
+      i++;
+    
+      //cout<<"越过遮挡找到了"<<X<<" "<<Y<<endl;
+      continue;//第四个柱子被第五个挡住需要continue,四个都在后面
+    }
+
+
+   }
+   else{
+     
+ 
+     if(part_segment(cloud,xl+1.4,xr+1.4,yl,yr,zl,zr,cylinders,i,X,Y,Height,cloud_cylinders)==2){
+      if(i==0){//在发车还没到达第一个柱子前1.4会遇到这种情况
+      XF=X;
+      YF=Y;
+      }
+      xl=X/1000+0.2;
+      xr=xl+1.4;
+      i++;
+     //cout<<"越过遮挡找到了"<<X<<" "<<Y<<endl;
+      continue;//第二个柱子被第一个挡住需要continue,四个都在前面
+    }
+   }
+   
+  
+ //cout<<"翻转一次"<<endl;
+  if(XF==0){//超出第五个柱子的情况，XF会在第一个柱子找到后初始化
+    xr=0;
+    xl=xr-1.4;
+  }
+  else{
+     xr=XF/1000-0.2;
+    xl=xr-1.4;
+    yl=YF/1000-2;
+    yr=YF/1000+2;
+  }
+
+  direction++;
+  continue;
+}
+if(j==2){
+  
+  //cout<<"找到了"<<X<<" "<<Y<<endl;
+  if(i==0){//找到第一个柱子后初始化XF
+    XF=X;
+    YF=Y;
+  }
+  if(direction){
+    xr=X/1000-0.2;
+    xl=xr-1.4;
+    yl=Y/1000-2;
+    yr=Y/1000+2;
+  }
+  else{
+    xl=X/1000+0.2;
+    xr=xl+1.4;
+    yl=Y/1000-2;
+    yr=Y/1000+2;
+  }
+  i++;
+}
+
+
+}
+if(i>=4){
+  cout<<"i = "<<i<<endl;
+    cylinders->get_coordinate(XS,YS);
+    if(XS<10000&&YS<10000){
+      f1<<XS<<" "<<YS<<endl;
+    }
+ 
+}
+ 
+
+
+//   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer0 (new pcl::visualization::PCLVisualizer ("3D Viewer0"));
+//  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer1 (new pcl::visualization::PCLVisualizer ("3D Viewer1"));
+//  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer2 (new pcl::visualization::PCLVisualizer ("3D Viewer2"));
+//    boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer3 (new pcl::visualization::PCLVisualizer ("3D Viewer3"));
+//   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer4 (new pcl::visualization::PCLVisualizer ("3D Viewer4"));
+//   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer5 (new pcl::visualization::PCLVisualizer ("3D Viewer5"));
+//     boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer6 (new pcl::visualization::PCLVisualizer ("3D Viewer6"));
+
+//   viewer0->addPointCloud<pcl::PointXYZ> (cloud, "sample cloud0");
+//   viewer1->addPointCloud<pcl::PointXYZ> (partition(cloud,-10,10,yl,yr,zl,zr), "sample cloud1");
+//   viewer2->addPointCloud<pcl::PointXYZ> (cloud_cylinders[0], "sample cloud2");
+//   viewer3->addPointCloud<pcl::PointXYZ> (cloud_cylinders[1], "sample cloud3");
+//   viewer4->addPointCloud<pcl::PointXYZ> (cloud_cylinders[2], "sample cloud4");
+//   viewer5->addPointCloud<pcl::PointXYZ> (cloud_cylinders[3], "sample cloud5");
+//   viewer6->addPointCloud<pcl::PointXYZ> (cloud_cylinders[4], "sample cloud6");
+
+//      viewer0->setBackgroundColor (0, 0, 0);
+//  viewer1->setBackgroundColor (0, 0, 0);
+//  viewer2->setBackgroundColor (0, 0, 0);
+//   viewer3->setBackgroundColor (0, 0, 0);
+//    viewer4->setBackgroundColor (0, 0, 0);
+//    viewer5->setBackgroundColor (0, 0, 0);
+//    viewer6->setBackgroundColor (0, 0, 0);
+
+ 
+
+
+   
+//     viewer0->addCoordinateSystem (1.0);
+//     viewer1->addCoordinateSystem (1.0);
+//     viewer2->addCoordinateSystem (1.0);
+//     viewer3->addCoordinateSystem (1.0);
+//     viewer4->addCoordinateSystem (1.0);
+//     viewer5->addCoordinateSystem (1.0);
+//     viewer6->addCoordinateSystem (1.0);
+
+//     viewer0->initCameraParameters ();
+//     viewer1->initCameraParameters ();
+//     viewer2->initCameraParameters (); 
+//      viewer3->initCameraParameters ();
+//      viewer4->initCameraParameters ();
+//      viewer5->initCameraParameters (); 
+//      viewer6->initCameraParameters (); 
+//     while (!viewer1->wasStopped())
+//     {   viewer0->spinOnce (100);
+//         viewer1->spinOnce (100);
+//         viewer2->spinOnce (100);
+//         viewer3->spinOnce (100);
+//         viewer4->spinOnce (100);
+//         viewer5->spinOnce (100);
+//         viewer6->spinOnce (100);
+//         boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+//     }
+
+
+
+
+}
+
+int main(int argc, char **argv)  
+{  
+ 
+  printf("开始程序");
+  cout<<endl;
+	
+  ros::init(argc,argv,"test");  
+  ros::NodeHandle n;  
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
+  ros::Subscriber sub = n.subscribe("velodyne_points", 10,velodyneViewerCallback);
+	ros::spin();
+
+
+  return (0);
+ 
+
+}  
+
+
+
+
+
+
