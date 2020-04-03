@@ -31,7 +31,7 @@
 #include <pcl/features/normal_3d.h>
 #include <fstream>
 #include <pcl/filters/project_inliers.h>
-
+#include "boost/bind.hpp"
 
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/conditional_removal.h>
@@ -991,7 +991,7 @@ void get_Post(pcl::PointCloud<PointT>::Ptr cloud, double lider_Xb, double lider_
 	}
 }
 
-void velodyneViewerCallback(const sensor_msgs::PointCloud2::ConstPtr& lidarMsg) {
+void velodyneViewerCallback(const sensor_msgs::PointCloud2::ConstPtr& lidarMsg,int flag) {
 	int i = 0;
 	int j = 0;
 	// All the objects needed
@@ -1042,14 +1042,28 @@ void velodyneViewerCallback(const sensor_msgs::PointCloud2::ConstPtr& lidarMsg) 
 	double YF = 0;
 	double lidar_thetab = 0,lidar_thetar = 0;
 	double xl,xr,yl,yr,zl,zr,hl,hr;
-	 		 xl = 0;//0
+	if(flag == 0){//蓝场
+			 xl = 0;//0
 			 xr = 3;//2
     		 yl = -2.5;//-3
+			 yr = 0;//3
+			 zl = 0;//0
+			 zr = 2;//2
+			 hl = 0.3;
+			 hr = 2;	
+
+	}
+	else{//红场
+			 xl = 0;//0
+			 xr = 3;//2
+    		 yl = 0;//-3
 			 yr = 2.5;//3
 			 zl = 0;//0
 			 zr = 2;//2
 			 hl = 0.3;
 			 hr = 2;	
+
+	}
 
 //------------XF 1827.67 YF 1717.08
 	cylinder_list* cylinders = new cylinder_list();
@@ -1362,13 +1376,16 @@ int main(int argc, char** argv)
 		//卡尔曼初始化
 		// kalmanflag=0;
 		// KalmanInit();
-
+	int flag=-1;
 	ros::init(argc, argv, "test");
 	ros::NodeHandle n;
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;
-	ros::Subscriber sub = n.subscribe("velodyne_points", 10, velodyneViewerCallback);
+	recive_data(flag);
+	if(flag==0||flag==1){
+	ros::Subscriber sub = n.subscribe<sensor_msgs::PointCloud2>("velodyne_points", 10, boost::bind(&velodyneViewerCallback,_1,flag));
 
 	ros::spin();
+	}
 
 	return (0);
 
